@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whisper 语音转文字服务</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .container {
+            max-width: 800px;
+            margin-top: 50px;
+        }
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            margin: 20px 0;
+            transition: border-color 0.3s;
+        }
+        .upload-area:hover {
+            border-color: #007bff;
+        }
+        .upload-area.dragover {
+            border-color: #007bff;
+            background-color: #f8f9fa;
+        }
+        .result-area {
+            background-color: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        .segment {
+            background-color: white;
+            border-radius: 5px;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-left: 4px solid #007bff;
+        }
+        .loading {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center mb-4">Whisper 语音转文字服务</h1>
+        
+        <!-- 登录区域 -->
+        <div id="loginSection" class="card">
+            <div class="card-body">
+                <h5 class="card-title">用户登录</h5>
+                <form id="loginForm">
+                    <div class="mb-3">
+                        <label for="username" class="form-label">用户名</label>
+                        <input type="text" class="form-control" id="username" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="password" class="form-label">密码</label>
+                        <input type="password" class="form-control" id="password" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">登录</button>
+                </form>
+                <div class="mt-3">
+                    <small class="text-muted">
+                        默认账号: admin/admin123 或 user/user123
+                    </small>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 主应用区域 -->
+        <div id="mainSection" class="d-none">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5>欢迎使用 Whisper 服务</h5>
+                <button id="logoutBtn" class="btn btn-sm btn-outline-secondary">退出登录</button>
+            </div>
+            
+            <!-- 模型信息 -->
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h6 class="card-title">模型信息</h6>
+                    <div id="modelInfo">加载中...</div>
+                </div>
+            </div>
+            
+            <!-- 文件上传区域 -->
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">上传音频文件</h5>
+                    <div class="upload-area" id="uploadArea">
+                        <input type="file" id="fileInput" accept="audio/*" style="display: none;">
+                        <p>点击选择文件或拖拽文件到此处</p>
+                        <p class="text-muted">支持的格式: MP3, WAV, M4A 等</p>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="beamSize" class="form-label">Beam Size (高级选项)</label>
+                        <input type="number" class="form-control" id="beamSize" value="5" min="1" max="10">
+                    </div>
+                    
+                    <button id="transcribeBtn" class="btn btn-primary">开始转录</button>
+                    
+                    <!-- 加载状态 -->
+                    <div class="loading mt-3">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">处理中...</span>
+                        </div>
+                        <span class="ms-2">正在处理音频文件，请稍候...</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 结果显示区域 -->
+            <div id="resultSection" class="card d-none">
+                <div class="card-body">
+                    <h5 class="card-title">转录结果</h5>
+                    <div id="resultInfo" class="mb-3"></div>
+                    <div id="resultContent" class="result-area"></div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 错误提示 -->
+        <div id="errorAlert" class="alert alert-danger d-none" role="alert"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let authToken = '';
+        
+        // 登录功能
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    authToken = data.token;
+                    document.getElementById('loginSection').classList.add('d-none');
+                    document.getElementById('mainSection').classList.remove('d-none');
+                    loadModelInfo();
+                } else {
+                    showError(data.error || '登录失败');
+                }
+            } catch (error) {
+                showError('网络错误: ' + error.message);
+            }
+        });
+        
+        // 退出登录
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            authToken = '';
+            document.getElementById('loginSection').classList.remove('d-none');
+            document.getElementById('mainSection').classList.add('d-none');
+            document.getElementById('resultSection').classList.add('d-none');
+        });
+        
+        // 加载模型信息
+        async function loadModelInfo() {
+            try {
+                const response = await fetch('/api/model/info', {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('modelInfo').innerHTML = `
+                        <div class="row">
+                            <div class="col-md-6"><strong>模型大小:</strong> ${data.model_size}</div>
+                            <div class="col-md-6"><strong>设备:</strong> ${data.device}</div>
+                            <div class="col-md-6"><strong>计算类型:</strong> ${data.compute_type}</div>
+                            <div class="col-md-6"><strong>CPU 线程:</strong> ${data.cpu_threads}</div>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error('Failed to load model info:', error);
+            }
+        }
+        
+        // 文件上传处理
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        let selectedFile = null;
+        
+        uploadArea.addEventListener('click', () => {
+            fileInput.click();
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            selectedFile = e.target.files[0];
+            if (selectedFile) {
+                uploadArea.innerHTML = `
+                    <p>已选择文件: <strong>${selectedFile.name}</strong></p>
+                    <p class="text-muted">点击重新选择文件</p>
+                `;
+            }
+        });
+        
+        // 拖拽上传
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0 && files[0].type.startsWith('audio/')) {
+                selectedFile = files[0];
+                uploadArea.innerHTML = `
+                    <p>已选择文件: <strong>${selectedFile.name}</strong></p>
+                    <p class="text-muted">点击重新选择文件</p>
+                `;
+            } else {
+                showError('请选择有效的音频文件');
+            }
+        });
+        
+        // 转录按钮
+        document.getElementById('transcribeBtn').addEventListener('click', async () => {
+            if (!selectedFile) {
+                showError('请先选择音频文件');
+                return;
+            }
+            
+            const beamSize = document.getElementById('beamSize').value;
+            const formData = new FormData();
+            formData.append('audio', selectedFile);
+            formData.append('beam_size', beamSize);
+            
+            // 显示加载状态
+            document.querySelector('.loading').style.display = 'block';
+            document.getElementById('transcribeBtn').disabled = true;
+            hideError();
+            
+            try {
+                const response = await fetch('/api/transcribe', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    },
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    displayResult(data);
+                } else {
+                    showError(data.error || '转录失败');
+                }
+            } catch (error) {
+                showError('网络错误: ' + error.message);
+            } finally {
+                document.querySelector('.loading').style.display = 'none';
+                document.getElementById('transcribeBtn').disabled = false;
+            }
+        });
+        
+        // 显示结果
+        function displayResult(data) {
+            const resultSection = document.getElementById('resultSection');
+            const resultInfo = document.getElementById('resultInfo');
+            const resultContent = document.getElementById('resultContent');
+            
+            resultInfo.innerHTML = `
+                <div class="row">
+                    <div class="col-md-6"><strong>检测语言:</strong> ${data.language}</div>
+                    <div class="col-md-6"><strong>语言概率:</strong> ${(data.language_probability * 100).toFixed(2)}%</div>
+                    <div class="col-12 mt-2"><strong>片段数量:</strong> ${data.segments.length}</div>
+                </div>
+            `;
+            
+            let segmentsHtml = '';
+            data.segments.forEach((segment, index) => {
+                segmentsHtml += `
+                    <div class="segment">
+                        <div class="d-flex justify-content-between">
+                            <strong>片段 ${index + 1}</strong>
+                            <span class="text-muted">${segment.start.toFixed(2)}s - ${segment.end.toFixed(2)}s</span>
+                        </div>
+                        <p class="mb-0 mt-2">${segment.text}</p>
+                    </div>
+                `;
+            });
+            
+            resultContent.innerHTML = segmentsHtml;
+            resultSection.classList.remove('d-none');
+        }
+        
+        // 错误提示
+        function showError(message) {
+            const errorAlert = document.getElementById('errorAlert');
+            errorAlert.textContent = message;
+            errorAlert.classList.remove('d-none');
+        }
+        
+        function hideError() {
+            document.getElementById('errorAlert').classList.add('d-none');
+        }
+    </script>
+</body>
+</html>

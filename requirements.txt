@@ -1,0 +1,6 @@
+faster-whisper
+fastapi
+uvicorn
+python-multipart
+aiofiles
+PyJWT
